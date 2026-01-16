@@ -13,21 +13,21 @@ resource "hcloud_server" "server" {
   location     = var.location
   firewall_ids = [hcloud_firewall.server_firewall.id]
   # the cloud init file consists of the "management part" which is coming from the module and the "runcmd part" which is coming from the module user.
-  ssh_keys     = [data.hcloud_ssh_key.me.id]
-  user_data  = data.cloudinit_config.idp.rendered
+  ssh_keys  = [data.hcloud_ssh_key.me.id]
+  user_data = data.cloudinit_config.idp.rendered
 }
 
 # Separate resource for Tailscale device cleanup
 resource "null_resource" "tailscale_cleanup" {
   # This resource depends on the server existing
   depends_on = [hcloud_server.server]
-  
+
   # Trigger recreation when server changes and store credentials
   triggers = {
-    server_id = hcloud_server.server.id
+    server_id   = hcloud_server.server.id
     server_name = var.server_name
-    api_key = var.tailscale_api_key
-    tailnet = var.tailscale_tailnet
+    api_key     = var.tailscale_api_key
+    tailnet     = var.tailscale_tailnet
   }
 
   # Cleanup provisioner that uses self.triggers for all values
@@ -87,10 +87,18 @@ resource "hcloud_firewall" "server_firewall" {
 
   # we can skip that last rule later if everything runs stable
   rule {
-    direction    = "out"
-    protocol     = "tcp"
+    direction       = "out"
+    protocol        = "tcp"
     destination_ips = ["0.0.0.0/0"]
-    port         = "1-65535"
+    port            = "1-65535"
+  }
+
+
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "80"
+    source_ips = ["0.0.0.0/0", "::/0"]
   }
 
 }
