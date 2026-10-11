@@ -8,21 +8,21 @@ A Terraform module to create a Hetzner Cloud virtual machine that automatically 
 - 🔒 **Secure Firewall**: Pre-configured firewall rules optimized for Tailscale connectivity
 - 🔑 **SSH-less Access**: Uses Tailscale SSH for secure remote access (no need for port 22)
 - ⚡ **Cloud-init Integration**: Supports custom user commands via cloud-init
-- 🛡️ **Security Hardening**: Includes fail2ban and ufw packages for additional security
+- 🛡️ **Cloud Firewall**: Hetzner firewall in front of the server, so ports published by Docker are not exposed by accident
 
 ## Architecture
 
 This module creates:
 - A Hetzner Cloud server with specified configuration
-- A Tailscale auth key (ephemeral, preauthorized)
+- A Tailscale auth key (single use, preauthorized, expires after 1 hour; the node is ephemeral unless `ephemeral = false`)
 - A firewall with Tailscale-optimized rules
 - Cloud-init configuration for automatic Tailscale setup
 
 ## Prerequisites
 
-- Terraform >= 0.13
+- OpenTofu >= 1.9 or Terraform >= 1.7
 - Hetzner Cloud API token
-- Tailscale API key with appropriate permissions
+- Tailscale API key with appropriate permissions, exported as `TAILSCALE_API_KEY` (or `TF_VAR_tailscale_api_key`) when you run `destroy`
 - SSH key uploaded to Hetzner Cloud
 
 ## Required Providers
@@ -43,6 +43,14 @@ terraform {
 ```
 
 ## Usage
+
+### Pin a version
+
+Point `source` at a tag or commit, so a change pushed to this repository never reaches your servers before you choose to update:
+
+```hcl
+source = "github.com/baklaci/terraform-hcloud-tailscale-server?ref=<tag or commit>"
+```
 
 ### Basic Example
 
@@ -172,10 +180,12 @@ terraform apply
 | ssh_keys | The public key that will be used to check ssh access | `list(string)` | n/a | yes |
 | runcmd | The runcommand part of the cloud_init script | `string` | `""` | no |
 | username | The username for the created user on the server | `string` | `"sprantic"` | no |
-| tailscale_api_key | Tailscale API key for device management (required for automatic cleanup on destroy) | `string` | n/a | yes |
+| tailscale_api_key | Deprecated and unused; see [Automatic Tailscale Device Cleanup](#automatic-tailscale-device-cleanup) | `string` | `null` | no |
 | tailscale_tailnet | Tailscale tailnet name (e.g., 'example.com' or 'user@domain.com') | `string` | n/a | yes |
 | docker_compose_yaml | Docker Compose YAML configuration to be deployed on the server | `string` | `""` | no |
 | docker_compose_project_name | Name for the Docker Compose project (defaults to server name) | `string` | `""` | no |
+| ephemeral | Join Tailscale as an ephemeral node. Set `false` for long-lived servers (see below) | `bool` | `true` | no |
+| public_tcp_ports | Inbound TCP ports open to the internet, each with `port` and `source_ips` | `list(object)` | port 80 from anywhere | no |
 
 ### Available Hetzner Cloud Locations
 
@@ -202,6 +212,19 @@ The module creates a firewall with the following rules:
 ### Inbound Rules
 - **ICMP**: Allow ping from anywhere
 - **UDP 41641**: Tailscale default port for peer-to-peer connections
+- **TCP, from `public_tcp_ports`**: by default port 80 from anywhere. Use `[]` for a server reached only over Tailscale, or limit the sources, for example to Cloudflare's ranges when the server sits behind a proxied Cloudflare record:
+
+```hcl
+data "cloudflare_ip_ranges" "cloudflare" {}
+
+module "tailscale_server" {
+  # ...
+  public_tcp_ports = [{
+    port       = "80"
+    source_ips = concat(data.cloudflare_ip_ranges.cloudflare.ipv4_cidrs, data.cloudflare_ip_ranges.cloudflare.ipv6_cidrs)
+  }]
+}
+```
 
 ### Outbound Rules
 - **UDP 3478**: STUN protocol for NAT traversal
@@ -241,8 +264,10 @@ export TAILSCALE_TAILNET="your-tailnet-name"
 
 - The server is configured to use Tailscale SSH instead of traditional SSH
 - Firewall rules are restrictive and only allow necessary Tailscale traffic
-- fail2ban is installed for additional protection against brute force attacks
-- The Tailscale auth key is ephemeral and expires after 1 hour
+- The Tailscale auth key works once and expires after 1 hour
+- An ephemeral node (the default) is removed by Tailscale after it has been offline for a while, and the used auth key cannot bring it back. With port 22 closed, the Hetzner web console is then the only way in. Set `ephemeral = false` for servers that must survive reboots and outages
+- The Tailscale API key is not stored in the state file: the destroy step reads it from the environment
+- The login user has no password and passwordless sudo, so whoever holds the SSH key or Tailscale SSH access is root. Limit Tailscale SSH in your tailnet policy
 - All packages are updated during initial setup
 - Automatic device cleanup prevents orphaned entries in Tailscale admin console
 
@@ -269,8 +294,11 @@ This module includes automatic cleanup of Tailscale devices when you run `terraf
    - Cleans up any associated device entries
 
 ### Requirements:
-- `tailscale_api_key`: A Tailscale API key with device management permissions
+- `TAILSCALE_API_KEY` (or `TF_VAR_tailscale_api_key`) in the environment when you run `destroy`: a Tailscale API key with device management permissions. Without it, destroy still succeeds and prints which device to remove by hand
 - `tailscale_tailnet`: Your Tailscale tailnet identifier
+
+### Upgrading from a version that stored the key in triggers:
+Earlier versions kept the API key in the cleanup resource's triggers, and so in the state file. This version forgets that resource (a `removed` block) without running its destroy step, so your server stays in the tailnet, and creates a new cleanup resource without the key. `tofu plan` shows `1 to add` and `1 to forget` for it. Rotate the API key afterwards if your state file was ever shared.
 
 ### API Key Permissions:
 Your Tailscale API key needs the following permissions:
