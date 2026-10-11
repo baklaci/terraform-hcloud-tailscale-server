@@ -1,6 +1,6 @@
 resource "tailscale_tailnet_key" "server_key" {
   reusable      = false
-  ephemeral     = true
+  ephemeral     = var.ephemeral
   preauthorized = true
   expiry        = 3600
   description   = substr(format("Key for %s", var.server_name), 0, 50)
@@ -17,41 +17,53 @@ resource "hcloud_server" "server" {
   user_data = data.cloudinit_config.idp.rendered
 }
 
-# Separate resource for Tailscale device cleanup
-resource "null_resource" "tailscale_cleanup" {
-  # This resource depends on the server existing
+# Separate resource for Tailscale device cleanup.
+# The API key is read from the environment at destroy time instead of being
+# stored in triggers, so it never lands in the state file.
+resource "null_resource" "tailscale_device_cleanup" {
   depends_on = [hcloud_server.server]
 
-  # Trigger recreation when server changes and store credentials
   triggers = {
     server_id   = hcloud_server.server.id
     server_name = var.server_name
-    api_key     = var.tailscale_api_key
     tailnet     = var.tailscale_tailnet
   }
 
-  # Cleanup provisioner that uses self.triggers for all values
   provisioner "local-exec" {
     when    = destroy
     command = <<-EOT
-      # Wait a moment for any pending operations
+      set -eu
+      KEY="$${TAILSCALE_API_KEY:-$${TF_VAR_tailscale_api_key:-}}"
+      if [ -z "$KEY" ]; then
+        echo "TAILSCALE_API_KEY not set: remove device ${self.triggers.server_name} in the Tailscale admin console" >&2
+        exit 0
+      fi
+
       sleep 5
-      
-      # Get the device ID using Tailscale API
-      DEVICE_ID=$(curl -s -H "Authorization: Bearer ${self.triggers.api_key}" \
+
+      DEVICE_ID=$(curl -fsS -H "Authorization: Bearer $KEY" \
         "https://api.tailscale.com/api/v2/tailnet/${self.triggers.tailnet}/devices" | \
         jq -r '.devices[] | select(.hostname == "${self.triggers.server_name}") | .id')
-      
-      # Delete the device if found
-      if [ ! -z "$DEVICE_ID" ] && [ "$DEVICE_ID" != "null" ]; then
+
+      if [ -n "$DEVICE_ID" ] && [ "$DEVICE_ID" != "null" ]; then
         echo "Removing Tailscale device: ${self.triggers.server_name} (ID: $DEVICE_ID)"
-        curl -X DELETE -H "Authorization: Bearer ${self.triggers.api_key}" \
+        curl -fsS -X DELETE -H "Authorization: Bearer $KEY" \
           "https://api.tailscale.com/api/v2/device/$DEVICE_ID"
         echo "Tailscale device removed successfully"
       else
         echo "Tailscale device ${self.triggers.server_name} not found or already removed"
       fi
     EOT
+  }
+}
+
+# The previous cleanup resource kept the API key in its triggers, so in the
+# state. Forget it without running its destroy step: destroying it would
+# remove the live server from the tailnet.
+removed {
+  from = null_resource.tailscale_cleanup
+  lifecycle {
+    destroy = false
   }
 }
 
@@ -93,12 +105,14 @@ resource "hcloud_firewall" "server_firewall" {
     port            = "1-65535"
   }
 
-
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "80"
-    source_ips = ["0.0.0.0/0", "::/0"]
+  dynamic "rule" {
+    for_each = var.public_tcp_ports
+    content {
+      direction  = "in"
+      protocol   = "tcp"
+      port       = rule.value.port
+      source_ips = rule.value.source_ips
+    }
   }
 
 }

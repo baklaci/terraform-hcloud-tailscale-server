@@ -41,9 +41,10 @@ variable "username" {
 }
 
 variable "tailscale_api_key" {
-    description = "Tailscale API key for device management (required for automatic cleanup on destroy)"
+    description = "Deprecated and unused: the cleanup on destroy reads TAILSCALE_API_KEY (or TF_VAR_tailscale_api_key) from the environment, so the key is not stored in the state. Kept so existing callers do not break."
     type = string
     sensitive = true
+    default = null
 }
 
 variable "tailscale_tailnet" {
@@ -61,4 +62,24 @@ variable "docker_compose_project_name" {
     description = "Name for the Docker Compose project (defaults to server name)"
     type = string
     default = ""
+}
+
+variable "ephemeral" {
+    description = "Join Tailscale as an ephemeral node. Ephemeral nodes are removed by Tailscale after being offline for a while, and the one-time auth key cannot bring them back, so set false for long-lived servers. Changing it on an existing server replaces the server."
+    type = bool
+    default = true
+}
+
+variable "public_tcp_ports" {
+    description = "Inbound TCP ports open to the internet, each with its allowed source ranges. The default keeps the earlier behaviour (port 80 from anywhere); use [] for a server reached only over Tailscale."
+    type = list(object({
+        port       = string
+        source_ips = list(string)
+    }))
+    default = [
+        {
+            port       = "80"
+            source_ips = ["0.0.0.0/0", "::/0"]
+        }
+    ]
 }
