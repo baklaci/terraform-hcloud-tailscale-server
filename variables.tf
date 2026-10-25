@@ -51,6 +51,12 @@ variable "tailscale_tailnet" {
     type = string
 }
 
+variable "tailscale_tags" {
+    description = "Tags the server joins the tailnet with. Tagged devices are not owned by a user and never expire; each tag must be listed in tagOwners of the tailnet policy"
+    type = list(string)
+    default = ["tag:server"]
+}
+
 variable "docker_compose_yaml" {
     description = "Docker Compose YAML configuration to be deployed on the server"
     type = string

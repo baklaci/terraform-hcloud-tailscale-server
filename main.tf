@@ -1,8 +1,10 @@
+# not ephemeral: Tailscale auto-deletes ephemeral nodes once they go offline (e.g. on reboot)
 resource "tailscale_tailnet_key" "server_key" {
   reusable      = false
-  ephemeral     = true
+  ephemeral     = false
   preauthorized = true
   expiry        = 3600
+  tags          = var.tailscale_tags
   description   = substr(format("Key for %s", var.server_name), 0, 50)
 }
 
