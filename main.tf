@@ -17,6 +17,12 @@ resource "hcloud_server" "server" {
   # the cloud init file consists of the "management part" which is coming from the module and the "runcmd part" which is coming from the module user.
   ssh_keys  = [data.hcloud_ssh_key.me.id]
   user_data = data.cloudinit_config.idp.rendered
+
+  # user_data only runs on first boot, and it embeds a fresh single-use tailnet key
+  # each run; without this every plan would replace (destroy) the running server.
+  lifecycle {
+    ignore_changes = [user_data, ssh_keys, image]
+  }
 }
 
 # Separate resource for Tailscale device cleanup
